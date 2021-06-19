@@ -2,12 +2,12 @@ from os import getenv
 from glob import glob
 from dotenv import load_dotenv
 from discord.ext.commands import Bot as BotBase
-from discord.ext.commands import CommandNotFound, BadArgument, MissingRequiredArgument
-from discord.errors import HTTPException, Forbidden
+import signal
+from lib.db.handle_errors import handle_errors
+from lib.db.query import db
 
 PREFIX = "!code "
 COGS = [path.split("/")[-1][:-3] for path in glob("./lib/cogs/*.py")]
-IGNORE_EXCEPTIONS = (CommandNotFound, BadArgument)
 load_dotenv()
 
 
@@ -16,6 +16,7 @@ class Bot(BotBase):
         self.PREFIX = PREFIX
         self.ready = False
         self.guild = None
+        self.conn = 0
 
         super().__init__(command_prefix=PREFIX)
 
@@ -23,6 +24,7 @@ class Bot(BotBase):
         for cog in COGS:
             self.load_extension(f"lib.cogs.{cog}")
             print(f"[+] Cog loaded - {cog}")
+
         print("[+] Setupcomplete")
 
     def run(self, version):
@@ -32,7 +34,7 @@ class Bot(BotBase):
 
         self.TOKEN = getenv("DISCORD_TOKEN")
 
-        print("[+] Running Bot......")
+        print(f"[+] Running Bot {version} ......")
         super().run(self.TOKEN, reconnect=True)
 
     async def on_message(self, message):
@@ -42,12 +44,19 @@ class Bot(BotBase):
 
     async def on_ready(self):
         if not self.ready:
+            self.loop.add_signal_handler(getattr(signal, 'SIGINT'),
+                                         lambda: self.loop.create_task(self.signal_handler()))
+            self.loop.add_signal_handler(getattr(signal, 'SIGTERM'),
+                                         lambda: self.loop.create_task(self.signal_handler()))
             self.ready = True
-            self.guild = self.get_guild(632799582350475265)
-            self.stdch = self.get_channel(854215344075440138)
-            await self.stdch.send("Now Online")
+
         else:
             print("Bot reconnecting....")
+
+    async def signal_handler(self):
+        print("[+] Time to go")
+        db.close_it()
+        await self.close()
 
     async def on_connect(self):
         print("[+] Bot Connected")
@@ -55,39 +64,9 @@ class Bot(BotBase):
     async def on_disconnect(self):
         print("[!] Bot Disconnected")
 
-    async def _on_error(self, err, *args, **kwargs):
-        if err == "on_command_error":
-            await args[0].send("Something went wrong.")
-
     async def on_command_error(self, context, exc):
-        if any([isinstance(exc, error) for error in IGNORE_EXCEPTIONS]):
-            pass
-
-        elif isinstance(exc, MissingRequiredArgument):
-            await context.send("One or more arguments are missing")
-
-        elif isinstance(exc.original, HTTPException):
-            await context.send("Unable to send message")
-
-        elif isinstance(exc.original, Forbidden):
-            await context.send("Don't have permissions")
-
-        elif hasattr(exc, "original"):
-            raise exc.original
-
-        else:
-            raise exc
-
-    # async def process_commands(self, message):
-    #     print("processing command")
-    #     ctx = await self.stdch.send(message, cls=Context)
-    #     print("after process")
-    #     if ctx.command is not None and ctx.guild is not None:
-    #         if self.ready:
-    #             print("invoked")
-    #             await self.invoke(ctx)
-    #         else:
-    #             await ctx.send("I am not ready")
+        print("[!] Error occured")
+        await handle_errors(exc, context)
 
 
 bot = Bot()
